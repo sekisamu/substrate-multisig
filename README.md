@@ -8,7 +8,10 @@ A simple workable Demo that shows how to implement a multi signature smart contr
 It is an example to show that how to completely implement a multi signature wallet using pallet. It includes:
 1. How to generate a random `AccountId` that is impossible to control with a known `secret key`, like a smart contract address
 2. How to make `Call`s on-behalf-of this randomly generated account
-So, as a multi-signature wallet, it's behaviors follow the pattern of the smart contract one.
+
+Dapp-developer-friendly, as it acts in the same way as the multisig wallet smart contract while implemented in Pallet(Substrate Runtime). 
+
+
 
 ### What you can do with it
 1. Use multi-sig wallets as the `stash-controller` pair, it allows multi users to collaborate while it requires no trust
