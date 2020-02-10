@@ -1,6 +1,7 @@
 # Substrate Multisig
 
 A simple workable Demo that shows how to implement a multi signature smart contract in Pallet(Runtime) module.
+
 **Recommend** that **DO NOT** use it in production.
 
 ## Description
