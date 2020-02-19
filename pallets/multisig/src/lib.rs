@@ -11,7 +11,7 @@
 
 use sp_std::{ prelude::*, marker::PhantomData, collections::btree_set::BTreeSet };
 use frame_support::{
-	decl_module, decl_storage, decl_event, decl_error, 
+	decl_module, decl_storage, decl_event, decl_error,
 	dispatch, ensure, Parameter, RuntimeDebug,
 	weights::{
 		GetDispatchInfo, PaysFee, DispatchClass, ClassifyDispatch, Weight, WeighData,
@@ -43,9 +43,9 @@ pub struct MultiSigConfig<AccountId, Hash> {
 	/// the members that co-manage a multi sig wallet
 	members: Vec<AccountId>,
 	/// declare the threshold that once it is reached,
-	/// the proposal will be executed by the multi sig wallet 
+	/// the proposal will be executed by the multi sig wallet
 	threshold: Percent,
-	/// the hash of proposals that not been executed, waiting for 
+	/// the hash of proposals that not been executed, waiting for
 	current_proposals: Vec<Hash>
 }
 
@@ -125,7 +125,7 @@ where
 		buf.extend_from_slice(&block_number.saturated_into::<u64>().to_be_bytes()[..]);
 		buf.extend_from_slice(&salt.saturated_into::<u64>().to_be_bytes()[..]);
 		buf.extend_from_slice(creator.as_ref());
-		
+
 		UncheckedFrom::unchecked_from(T::Hashing::hash(&buf[..]))
 	}
 }
@@ -167,7 +167,7 @@ decl_error! {
 	pub enum Error for Module<T: Trait> {
 		/// at least 2 accounts in the membership
 		NotEnoughMembers,
-		/// make sure the creator of a multi sig wallet 
+		/// make sure the creator of a multi sig wallet
 		/// in the member list
 		MissedMember,
 		/// threshold should not be zero
@@ -181,13 +181,13 @@ decl_error! {
 		/// there are duplicated account in the members
 		/// reserved for future use
 		DuplicatedMembers,
-		/// 1. the sender has no rights to propose 
+		/// 1. the sender has no rights to propose
 		/// onbehalf of some specific multisig wallet
 		NotAllowed,
 		/// Wrong order passing into runtime mod
 		WrongOrder,
 		/// Double-approve error
-		/// a member is not allowed to propose more than 
+		/// a member is not allowed to propose more than
 		/// once for the same proposal
 		DoubleApprove,
 		/// Not a member of specific multisig wallet
@@ -211,18 +211,18 @@ decl_module! {
 			let who = ensure_signed(origin)?;
 			// pre generate a new multisig wallet address
 			let multi_sig_addr = T::AddrGenerator::multi_sig_address(
-				&who, 
-				<system::Module<T>>::block_number(), 
+				&who,
+				<system::Module<T>>::block_number(),
 				<system::Module<T>>::account_nonce(&who));
 			// ensure the pre-generated address does not exist
 			ensure!(Self::multi_sig(&multi_sig_addr).is_none(), Error::<T>::MultiSigExisted);
 			ensure!(!threshold.is_zero(), Error::<T>::ZeroThreshold);
 			let mut members = members;
 			ensure!(members.contains(&who), Error::<T>::MissedMember);
-			
+
 			// remove duplicated accounts in the member list
 			// make sure that each member is unique
-			// RECOMMEND to do this offchain to not waste resources onchain 
+			// RECOMMEND to do this offchain to not waste resources onchain
 			ensure!(Self::is_sort_and_unique(&members), Error::<T>::WrongOrder);
 			members.dedup();
 			ensure!(members.len() > 1, Error::<T>::NotEnoughMembers);
@@ -237,6 +237,8 @@ decl_module! {
 		fn propose(origin, multisig: T::AccountId, call: Box<<T as Trait>::Proposal>) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			ensure!(MultiSig::<T>::exists(&multisig), Error::<T>::UnknownAddress);
+
+			// JC-NOTE: use `ok_or`, or `map_err`, even though I know you have checked `multisig` exists
 			let mut config = Self::multi_sig(&multisig).unwrap();
 			ensure!(config.is_member(&who), Error::<T>::NotAllowed);
 			// compute the hash of the proposal
@@ -247,6 +249,8 @@ decl_module! {
 				<Proposals<T>>::insert(&call_hash, proposal_status);
 				// add to the multisig config
 				// TODO: check the mutability if the value is Option<T>
+
+				//JC-NOTE: emit an event a new proposal and test the event
 				<MultiSig<T>>::mutate(&multisig, |o|{
 					if let Some(config) = o {
 						config.new_proposal(call_hash);
@@ -257,15 +261,20 @@ decl_module! {
 				let mut proposal_status = Self::proposals(&call_hash).unwrap();
 				ensure!(proposal_status.is_right_multisig(&multisig), Error::<T>::NotAllowed);
 				ensure!(!proposal_status.has_already_approved(&who), Error::<T>::DoubleApprove);
-				
+
 				if !Self::process_proposal(&multisig, who, &mut proposal_status) {
 					// if not ready to execute then to update the status
 					<Proposals<T>>::insert(&call_hash, proposal_status);
+
+					//JC-NOTE: emit an event on the current % vs threshold and test the event
+
 				} else {
 					// remove before execution, whether the result is a success or failure
 					Self::internal_remove_proposal(&call_hash, &mut config);
 					// update the current proposals in storage
 					<MultiSig<T>>::insert(&multisig, config);
+
+					//JC-NOTE: emit an event that a call is executed and test the event
 					return call.dispatch(system::RawOrigin::Signed(multisig).into());
 				}
 			}
@@ -282,7 +291,7 @@ decl_module! {
 					if let Some(config) = o {
 						config.remove_member(&member);
 					}
-				}); 
+				});
 				Ok(())
 			} else {
 				Err(Error::<T>::UnknownAddress)?
@@ -299,7 +308,7 @@ decl_module! {
 					if let Some(config) = o {
 						config.add_member(new_member);
 					}
-				}); 
+				});
 				Ok(())
 			} else {
 				Err(Error::<T>::UnknownAddress)?
@@ -307,7 +316,7 @@ decl_module! {
 		}
 
 		// TODO: ready for hacking
-		// [ ] update threshold 
+		// [ ] update threshold
 		// [ ] introduce weights to gain finer-grained measurement for each member
 	}
 }
@@ -323,7 +332,7 @@ impl<T: Trait> Module<T> {
 	/// true to trigger the execution
 	fn process_proposal(
 		multisig_address: &T::AccountId,
-		proposer: T::AccountId, 
+		proposer: T::AccountId,
 		proposal_status: &mut ProposalStatus<T::AccountId>
 	) -> bool
 	{
@@ -356,6 +365,8 @@ impl<T: Trait> Module<T> {
 		let approved_members_set: BTreeSet<T::AccountId> = approved_members.into_iter().collect();
 		// find all the members in approved list that are not among the membership
 		// if all approved members are valid then the result is empty
+
+		// JC-NOTE: isn't an `intersection` be more direct?
 		let difference = approved_members_set.difference(&total_members_set).cloned().collect::<BTreeSet<_>>();
 		(&approved_members_set - &difference).into_iter().collect::<Vec<T::AccountId>>()
 	}
@@ -366,8 +377,8 @@ impl<T: Trait> Module<T> {
 	}
 
 	fn internal_remove_proposal(
-		call_hash: &T::Hash, 
-		config: &mut MultiSigConfig<T::AccountId, T::Hash>) 
+		call_hash: &T::Hash,
+		config: &mut MultiSigConfig<T::AccountId, T::Hash>)
 	{
 		// delete status
 		<Proposals<T>>::remove(call_hash);
@@ -375,3 +386,8 @@ impl<T: Trait> Module<T> {
 		config.remove_proposal(call_hash);
 	}
 }
+
+// JC-NOTE: For next step
+//   - present in Substrate Seminar. Contact Joshy
+//   - create a simple frontend to demonstrate
+//   - check out shawn recovery pallet (https://www.youtube.com/watch?v=ZfhEAzRCFBc)
