@@ -391,3 +391,5 @@ impl<T: Trait> Module<T> {
 //   - present in Substrate Seminar. Contact Joshy
 //   - create a simple frontend to demonstrate
 //   - check out shawn recovery pallet (https://www.youtube.com/watch?v=ZfhEAzRCFBc)
+//   - advanced: extend the pallet interface so the multi-sig can be integrated to other
+//     pallet that want to have a multi-sig feature.
