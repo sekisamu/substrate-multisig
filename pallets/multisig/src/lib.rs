@@ -12,16 +12,17 @@
 use sp_std::{ prelude::*, marker::PhantomData, collections::btree_set::BTreeSet };
 use frame_support::{
 	decl_module, decl_storage, decl_event, decl_error, 
-	dispatch, ensure, Parameter, RuntimeDebug,
+	dispatch, ensure, Parameter, RuntimeDebug, StorageValue,
 	weights::{
 		GetDispatchInfo, PaysFee, DispatchClass, ClassifyDispatch, Weight, WeighData,
 		SimpleDispatchInfo,
 	},
-	traits::{Currency, ReservableCurrency, Get, OnReapAccount},
+	traits::{Currency, ReservableCurrency, Get},
 };
 use sp_core::crypto::UncheckedFrom;
 
-use sp_runtime::{Percent, DispatchResult, traits::{ Hash, Dispatchable, SaturatedConversion }};
+use sp_arithmetic::{ PerThing, Percent };
+use sp_runtime::{ DispatchResult, traits::{ Hash, Dispatchable, SaturatedConversion }};
 use frame_system::{ self as system, ensure_root, ensure_signed };
 use codec::{Encode, Decode};
 
@@ -91,6 +92,8 @@ pub struct ProposalStatus<AccountId> {
 	multisig_wallet: AccountId,
 	/// the members who have approved this proposal
 	approved_members: Vec<AccountId>,
+	/// ready to execute or not
+	ready_to_execute: bool,
 }
 
 
@@ -98,8 +101,13 @@ impl<AccountId: PartialEq + Ord> ProposalStatus<AccountId> {
 	fn new(multisig_wallet: AccountId, initiator: AccountId) -> Self {
 		ProposalStatus {
 			multisig_wallet,
-			approved_members: vec![initiator]
+			approved_members: vec![initiator],
+			ready_to_execute: false
 		}
+	}
+
+	fn update_execution_status(&mut self, ready_to_execute: bool) {
+		self.ready_to_execute = ready_to_execute
 	}
 
 	fn update_approved_members(&mut self, new: Vec<AccountId>) {
@@ -108,6 +116,10 @@ impl<AccountId: PartialEq + Ord> ProposalStatus<AccountId> {
 
 	fn is_right_multisig(&self, address: &AccountId) -> bool {
 		&self.multisig_wallet == address
+	}
+
+	fn is_ready_to_execute(&self) -> bool {
+		self.ready_to_execute
 	}
 
 	fn has_already_approved(&self, who: &AccountId) -> bool {
@@ -156,9 +168,15 @@ decl_storage! {
 
 // The pallet's events
 decl_event!(
-	pub enum Event<T> where AccountId = <T as system::Trait>::AccountId {
+	pub enum Event<T> where 
+		AccountId = <T as system::Trait>::AccountId,
+		Hash = <T as system::Trait>::Hash {
 		/// a multisig wallet has been created
 		MultiSigCreated(AccountId),
+		/// submit a propose 
+		ProposeSubmitted(Hash, AccountId),
+		/// propose executed
+		Executed(Hash),
 	}
 );
 
@@ -166,6 +184,8 @@ decl_event!(
 decl_error! {
 	pub enum Error for Module<T: Trait> {
 		/// at least 2 accounts in the membership
+		/// when in the process of execution, it means
+		/// the proposal is not ready to execute
 		NotEnoughMembers,
 		/// make sure the creator of a multi sig wallet 
 		/// in the member list
@@ -192,6 +212,8 @@ decl_error! {
 		DoubleApprove,
 		/// Not a member of specific multisig wallet
 		NotAMember,
+		/// Proposal does not exist
+		ProposalNotExists,
 
 	}
 }
@@ -207,6 +229,7 @@ decl_module! {
 		fn deposit_event() = default;
 
 		/// create a new multi sig wallet
+		#[weight = SimpleDispatchInfo::FixedNormal(100_000)]
 		fn create_multisig_wallet(origin, members: Vec<T::AccountId>, threshold: Percent) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			// pre generate a new multisig wallet address
@@ -234,14 +257,24 @@ decl_module! {
 		}
 
 		/// propose a new or existing proposal
+		#[weight = SimpleDispatchInfo::FixedNormal(100_000)]
 		fn propose(origin, multisig: T::AccountId, call: Box<<T as Trait>::Proposal>) -> DispatchResult {
 			let who = ensure_signed(origin)?;
-			ensure!(MultiSig::<T>::exists(&multisig), Error::<T>::UnknownAddress);
-			let mut config = Self::multi_sig(&multisig).unwrap();
+			// to ensure that this multisig wallet address exists
+			let config = Self::multi_sig(&multisig).ok_or(Error::<T>::UnknownAddress)?;
 			ensure!(config.is_member(&who), Error::<T>::NotAllowed);
 			// compute the hash of the proposal
 			let call_hash = T::Hashing::hash(&call.clone().encode()[..]);
-			if !Proposals::<T>::exists(&call_hash) {
+			if let Some(proposal_status) = Self::proposals(&call_hash) {
+				// process exsiting proposal
+				let mut proposal_status = Self::proposals(&call_hash).unwrap();
+				ensure!(proposal_status.is_right_multisig(&multisig), Error::<T>::NotAllowed);
+				ensure!(!proposal_status.has_already_approved(&who), Error::<T>::DoubleApprove);
+				let ready_to_execute = Self::process_proposal(&multisig, who.clone(), &mut proposal_status);
+				proposal_status.update_execution_status(ready_to_execute);
+				<Proposals<T>>::insert(&call_hash, proposal_status);
+				
+			} else {
 				// initialize
 				let proposal_status = ProposalStatus::new(multisig.clone(), who.clone());
 				<Proposals<T>>::insert(&call_hash, proposal_status);
@@ -252,28 +285,30 @@ decl_module! {
 						config.new_proposal(call_hash);
 					};
 				});
-			} else {
-				// process exsiting proposal
-				let mut proposal_status = Self::proposals(&call_hash).unwrap();
-				ensure!(proposal_status.is_right_multisig(&multisig), Error::<T>::NotAllowed);
-				ensure!(!proposal_status.has_already_approved(&who), Error::<T>::DoubleApprove);
-				
-				if !Self::process_proposal(&multisig, who, &mut proposal_status) {
-					// if not ready to execute then to update the status
-					<Proposals<T>>::insert(&call_hash, proposal_status);
-				} else {
-					// remove before execution, whether the result is a success or failure
-					Self::internal_remove_proposal(&call_hash, &mut config);
-					// update the current proposals in storage
-					<MultiSig<T>>::insert(&multisig, config);
-					return call.dispatch(system::RawOrigin::Signed(multisig).into());
-				}
 			}
+			Self::deposit_event(RawEvent::ProposeSubmitted(call_hash, who));
 			Ok(())
+		}
+
+		#[weight = SimpleDispatchInfo::FixedNormal(100_000)]
+		fn execute_proposal(origin, multisig: T::AccountId, call: Box<<T as Trait>::Proposal>) -> DispatchResult {
+			let who = ensure_signed(origin)?;
+			let mut config = Self::multi_sig(&multisig).ok_or(Error::<T>::UnknownAddress)?;
+			let call_hash = T::Hashing::hash(&call.clone().encode()[..]);
+			let proposal = Self::proposals(&call_hash).ok_or(Error::<T>::ProposalNotExists)?;
+			ensure!(proposal.is_ready_to_execute(), Error::<T>::NotEnoughMembers);
+		
+			// remove before execution, whether the result is a success or failure
+			Self::internal_remove_proposal(&call_hash, &mut config);
+			// update the current proposals in storage
+			<MultiSig<T>>::insert(&multisig, config);
+			Self::deposit_event(RawEvent::Executed(call_hash));
+			return call.dispatch(system::RawOrigin::Signed(multisig).into());
 		}
 
 		/// Can only be called by multisig wallet
 		/// to remove a given member
+		#[weight = SimpleDispatchInfo::FixedNormal(100_000)]
 		fn remove_member(origin, member: T::AccountId) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			if let Some(config) = Self::multi_sig(&who) {
@@ -291,6 +326,7 @@ decl_module! {
 
 		/// Can only be called by multisig wallet
 		/// add a new member to the member list
+		#[weight = SimpleDispatchInfo::FixedNormal(100_000)]
 		fn add_member(origin, new_member: T::AccountId) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			if let Some(config) = Self::multi_sig(&who) {
@@ -356,8 +392,9 @@ impl<T: Trait> Module<T> {
 		let approved_members_set: BTreeSet<T::AccountId> = approved_members.into_iter().collect();
 		// find all the members in approved list that are not among the membership
 		// if all approved members are valid then the result is empty
-		let difference = approved_members_set.difference(&total_members_set).cloned().collect::<BTreeSet<_>>();
-		(&approved_members_set - &difference).into_iter().collect::<Vec<T::AccountId>>()
+		approved_members_set.intersection(&total_members_set).cloned().collect()
+		// let difference = approved_members_set.difference(&total_members_set).cloned().collect::<BTreeSet<_>>();
+		// (&approved_members_set - &difference).into_iter().collect::<Vec<T::AccountId>>()
 	}
 
 	/// approximatelly

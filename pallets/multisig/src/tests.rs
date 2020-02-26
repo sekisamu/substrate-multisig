@@ -28,7 +28,8 @@ fn it_works_for_default_value() {
 		assert_ok!(Multisig::propose(Origin::signed(1), multisig_wallet, call.clone()));
 		assert_eq!(Multisig::proposals(&call_hash), Some(ProposalStatus {
 			multisig_wallet: multisig_wallet,
-			approved_members: vec![1]
+			approved_members: vec![1],
+			ready_to_execute: false
 		}));
 
 		assert_eq!(Multisig::multi_sig(&multisig_wallet), Some(MultiSigConfig {
@@ -40,15 +41,14 @@ fn it_works_for_default_value() {
 		// the same one brought up by account 2
 		assert_ok!(Multisig::propose(Origin::signed(2), multisig_wallet, call.clone()));
 		// total active members are [1 ,2, 3] and the thresold is 50%
-		// if account 1 and 2 have propoosed the same one, 
-		// this proposal should be executed automatically
-		// and after executed, this proposal should be removed
 		assert_eq!(Multisig::multi_sig(&multisig_wallet), Some(MultiSigConfig {
-			members: vec![1, 2, 3, 4],
+			members: vec![1, 2, 3, ],
 			threshold: Percent::from_percent(50),
-			current_proposals: vec![]
+			current_proposals: vec![call_hash]
 		}));
-	
+
+		// after executed, this proposal should be removed
+		assert_ok!(Multisig::execute_proposal(Origin::signed(4), multisig_wallet, call.clone()));
 		assert_eq!(Multisig::proposals(&call_hash), None);
 	});
 
