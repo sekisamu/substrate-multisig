@@ -1,13 +1,11 @@
 use super::*;
 
 use frame_system::RawOrigin;
-use sp_io::hashing::blake2_256;
 use frame_benchmarking::{benchmarks, account};
 use sp_runtime::traits::{Bounded, Dispatchable};
 
-use crate::Module as Multisig;
-
 const SEED: u32 = 0;
+
 benchmarks! {
     _ {
         let u in 1..1000 => ();
