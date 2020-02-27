@@ -377,6 +377,7 @@ impl_runtime_apis! {
 			match module.as_slice() {
 				b"pallet-balances" | b"balances" => Balances::run_benchmark(extrinsic, steps, repeat).ok(),
 				b"pallet-timestamp" | b"timestamp" => Timestamp::run_benchmark(extrinsic, steps, repeat).ok(),
+				b"pallet-multisig" | b"multisig" => Multisig::run_benchmark(extrinsic, steps, repeat).ok(),
 				_ => None,
 			}
 		}

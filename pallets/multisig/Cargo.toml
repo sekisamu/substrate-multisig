@@ -15,7 +15,7 @@ sp-runtime = { version = "2.0.0-alpha.1", default-features = false, git = "https
 frame-support = { version = "2.0.0-alpha.1", default-features = false, git = "https://github.com/paritytech/substrate.git" }
 frame-system = { version = "2.0.0-alpha.1", default-features = false, git = "https://github.com/paritytech/substrate.git" }
 sp-arithmetic = { version = "2.0.0-alpha.1", default-features = false, git = "https://github.com/paritytech/substrate.git" }
-
+frame-benchmarking = {version = "2.0.0-alpha.1", default-features = false, git = "https://github.com/paritytech/substrate.git" }
 
 [features]
 default = ['std']
@@ -31,4 +31,5 @@ std = [
     'frame-support/std',
     'sp-runtime/std',
     'sp-arithmetic/std',
+    'frame-benchmarking/std'
 ]

@@ -12,18 +12,16 @@
 use sp_std::{ prelude::*, marker::PhantomData, collections::btree_set::BTreeSet };
 use frame_support::{
 	decl_module, decl_storage, decl_event, decl_error, 
-	dispatch, ensure, Parameter, RuntimeDebug, StorageValue,
+	dispatch, ensure, Parameter, RuntimeDebug,
 	weights::{
-		GetDispatchInfo, PaysFee, DispatchClass, ClassifyDispatch, Weight, WeighData,
-		SimpleDispatchInfo,
-	},
-	traits::{Currency, ReservableCurrency, Get},
+		GetDispatchInfo, SimpleDispatchInfo, FunctionOf
+	}
 };
 use sp_core::crypto::UncheckedFrom;
 
 use sp_arithmetic::{ PerThing, Percent };
 use sp_runtime::{ DispatchResult, traits::{ Hash, Dispatchable, SaturatedConversion }};
-use frame_system::{ self as system, ensure_root, ensure_signed };
+use frame_system::{ self as system, ensure_signed };
 use codec::{Encode, Decode};
 
 
@@ -32,6 +30,8 @@ mod mock;
 
 #[cfg(test)]
 mod tests;
+
+mod benchmarking;
 
 
 pub trait AddressDeterminator<AccountId, BlockNumber, Index> {
@@ -229,7 +229,16 @@ decl_module! {
 		fn deposit_event() = default;
 
 		/// create a new multi sig wallet
-		#[weight = SimpleDispatchInfo::FixedNormal(100_000)]
+		/// # <weight>
+		/// Key: M - length of members, 
+		/// - One storage reads - O(1)
+		/// - One search in sorted list - O(logM)
+		/// - Confirmation that the list is sorted - O(M)
+		/// - One storage writes - O(1)
+		/// - One event
+		/// Total Complexity: O(M + logM)
+		/// # <weight>
+		#[weight = SimpleDispatchInfo::FixedNormal(200_000)]
 		fn create_multisig_wallet(origin, members: Vec<T::AccountId>, threshold: Percent) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			// pre generate a new multisig wallet address
@@ -257,6 +266,12 @@ decl_module! {
 		}
 
 		/// propose a new or existing proposal
+		/// # <weight>
+		/// Key: length of approved members - M
+		/// - One storage reads - O(1)
+		/// - two set intersection - ?
+		/// - One storage write - O(M)
+		/// # <weight>
 		#[weight = SimpleDispatchInfo::FixedNormal(100_000)]
 		fn propose(origin, multisig: T::AccountId, call: Box<<T as Trait>::Proposal>) -> DispatchResult {
 			let who = ensure_signed(origin)?;
@@ -273,7 +288,7 @@ decl_module! {
 				let ready_to_execute = Self::process_proposal(&multisig, who.clone(), &mut proposal_status);
 				proposal_status.update_execution_status(ready_to_execute);
 				<Proposals<T>>::insert(&call_hash, proposal_status);
-				
+		
 			} else {
 				// initialize
 				let proposal_status = ProposalStatus::new(multisig.clone(), who.clone());
@@ -290,7 +305,11 @@ decl_module! {
 			Ok(())
 		}
 
-		#[weight = SimpleDispatchInfo::FixedNormal(100_000)]
+		#[weight = FunctionOf(
+			|args: (&T::AccountId, &Box<<T as Trait>::Proposal>)| args.1.get_dispatch_info().weight + 10_000,
+			|args: (&T::AccountId, &Box<<T as Trait>::Proposal>)| args.1.get_dispatch_info().class,
+			true
+		)]
 		fn execute_proposal(origin, multisig: T::AccountId, call: Box<<T as Trait>::Proposal>) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			let mut config = Self::multi_sig(&multisig).ok_or(Error::<T>::UnknownAddress)?;
@@ -308,7 +327,13 @@ decl_module! {
 
 		/// Can only be called by multisig wallet
 		/// to remove a given member
-		#[weight = SimpleDispatchInfo::FixedNormal(100_000)]
+		/// # <weight>
+		/// Key: length of members in multisigConfig: M
+		/// - One storage reads - O(1)
+		/// - remove items in list - O(M)
+		/// Total complexity - O(M)
+		/// # <weight>
+		#[weight = SimpleDispatchInfo::FixedNormal(10_000)]
 		fn remove_member(origin, member: T::AccountId) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			if let Some(config) = Self::multi_sig(&who) {
@@ -326,6 +351,13 @@ decl_module! {
 
 		/// Can only be called by multisig wallet
 		/// add a new member to the member list
+		/// # <weight>
+		/// Key: length of members in multisigConfig: M
+		/// - One storage read - O(1)
+		/// - search in members - O(M)
+		/// - Storage write - O(M)
+		/// Total complexity - O(M)
+		/// # <weight>
 		#[weight = SimpleDispatchInfo::FixedNormal(100_000)]
 		fn add_member(origin, new_member: T::AccountId) -> DispatchResult {
 			let who = ensure_signed(origin)?;
